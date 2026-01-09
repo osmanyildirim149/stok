@@ -234,413 +234,111 @@
 
   <div class="toast" id="toast"></div>
 
-  <script>
-    // ===== Utilities =====
-    const $ = (s) => document.querySelector(s);
-    const fmtDate = (ms) => new Date(ms).toLocaleString("tr-TR");
-    const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  <script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
+  import {
+    getFirestore, collection, doc,
+    setDoc, updateDoc, deleteDoc,
+    onSnapshot, query, orderBy, serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
-    function toast(msg){
-      const el = $("#toast");
-      el.textContent = msg;
-      el.classList.add("show");
-      clearTimeout(toast._t);
-      toast._t = setTimeout(()=>el.classList.remove("show"), 1600);
-    }
+  // 🔥 BURAYA KENDİ firebaseConfig'İNİ YAPIŞTIR
+  const firebaseConfig = {
+    apiKey: "BURAYA",
+    authDomain: "BURAYA",
+    projectId: "BURAYA",
+    storageBucket: "BURAYA",
+    messagingSenderId: "BURAYA",
+    appId: "BURAYA"
+  };
 
-    // ===== Storage =====
-    const KEY = "depo_stok_v1";
-    function load(){
-      try{
-        const raw = localStorage.getItem(KEY);
-        return raw ? JSON.parse(raw) : [];
-      }catch(e){
-        console.warn(e);
-        return [];
-      }
-    }
-    function save(items){
-      localStorage.setItem(KEY, JSON.stringify(items));
-    }
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const itemsCol = collection(db, "items");
 
-    // ===== State =====
-    let items = load(); // {id,name,qty,threshold,note,createdAt,updatedAt}
-    let selectedId = null;
+  const $ = s => document.querySelector(s);
+  const nameEl = $("#name");
+  const qtyEl = $("#qty");
+  const thresholdEl = $("#threshold");
+  const noteEl = $("#note");
+  const tbody = $("#tbody");
 
-    // ===== DOM refs =====
-    const nameEl = $("#name");
-    const qtyEl = $("#qty");
-    const thresholdEl = $("#threshold");
-    const noteEl = $("#note");
-    const saveBtn = $("#saveBtn");
-    const resetBtn = $("#resetBtn");
-    const deleteBtn = $("#deleteBtn");
-    const wipeBtn = $("#wipeBtn");
+  let items = [];
+  let selectedId = null;
 
-    const searchEl = $("#search");
-    const sortEl = $("#sort");
-    const onlyLowEl = $("#onlyLow");
-
-    const tbody = $("#tbody");
-    const countPill = $("#countPill");
-    const modeText = $("#modeText");
-    const statusDot = $("#statusDot");
-    const kpis = $("#kpis");
-
-    // ===== Render =====
-    function getStatus(it){
-      const th = Number.isFinite(it.threshold) ? it.threshold : 0;
-      if (it.qty <= 0) return {label:"Bitti", cls:"bad"};
-      if (it.qty <= th) return {label:"Azaldı", cls:"warn"};
-      return {label:"İyi", cls:"good"};
-    }
-
-    function filtered(){
-      const q = searchEl.value.trim().toLowerCase();
-      const onlyLow = onlyLowEl.checked;
-
-      let list = items.filter(it => {
-        const hay = (it.name + " " + (it.note||"")).toLowerCase();
-        if (q && !hay.includes(q)) return false;
-        if (onlyLow){
-          const th = Number.isFinite(it.threshold) ? it.threshold : 0;
-          if (!(it.qty <= th)) return false;
-        }
-        return true;
-      });
-
-      const sort = sortEl.value;
-      const byName = (a,b)=> a.name.localeCompare(b.name, "tr", {sensitivity:"base"});
-      if (sort==="name_asc") list.sort(byName);
-      else if (sort==="name_desc") list.sort((a,b)=>byName(b,a));
-      else if (sort==="qty_desc") list.sort((a,b)=>b.qty-a.qty || byName(a,b));
-      else if (sort==="qty_asc") list.sort((a,b)=>a.qty-b.qty || byName(a,b));
-      else if (sort==="updated_desc") list.sort((a,b)=>b.updatedAt-a.updatedAt);
-      else if (sort==="created_desc") list.sort((a,b)=>b.createdAt-a.createdAt);
-
-      return list;
-    }
-
-    function render(){
-      const list = filtered();
-      tbody.innerHTML = "";
-
-      for(const it of list){
-        const st = getStatus(it);
-        const tr = document.createElement("tr");
-
-        tr.innerHTML = `
-          <td>
-            <div style="font-weight:800">${escapeHtml(it.name)}</div>
-            <div class="muted" style="font-size:12px">Güncellendi: ${escapeHtml(fmtDate(it.updatedAt))}</div>
-          </td>
-          <td style="font-weight:800">${it.qty}</td>
-          <td class="muted">${escapeHtml(it.note || "-")}</td>
-          <td>
-            <span class="badge">
-              <span class="dot ${st.cls}"></span>
-              ${st.label}
-            </span>
-            <div class="muted" style="font-size:12px; margin-top:6px">Eşik: ${it.threshold ?? 0}</div>
-          </td>
-          <td>
-            <div class="right">
-              <button class="tiny" data-act="inc" data-id="${it.id}">+1</button>
-              <button class="tiny" data-act="dec" data-id="${it.id}">-1</button>
-              <button class="tiny" data-act="edit" data-id="${it.id}">Düzenle</button>
-            </div>
-          </td>
-        `;
-
-        // Click row to edit
-        tr.addEventListener("click", (e)=>{
-          const btn = e.target.closest("button");
-          if (btn) return; // buttons handle separately
-          select(it.id);
-        });
-
-        tbody.appendChild(tr);
-      }
-
-      countPill.textContent = `${list.length} ürün`;
-
-      // KPIs
-      const total = items.length;
-      const low = items.filter(it=>{
-        const th = Number.isFinite(it.threshold) ? it.threshold : 0;
-        return it.qty <= th;
-      }).length;
-      const out = items.filter(it=>it.qty<=0).length;
-      const sum = items.reduce((a,it)=>a + (Number(it.qty)||0), 0);
-
-      kpis.innerHTML = `
-        <div class="box"><div class="num">${total}</div><div class="lbl">Toplam ürün</div></div>
-        <div class="box"><div class="num">${sum}</div><div class="lbl">Toplam adet</div></div>
-        <div class="box"><div class="num">${low}</div><div class="lbl">Düşük stok</div></div>
-        <div class="box"><div class="num">${out}</div><div class="lbl">Biten</div></div>
-      `;
-    }
-
-    function escapeHtml(s){
-      return String(s).replace(/[&<>"']/g, c => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-      }[c]));
-    }
-
-    // ===== CRUD =====
-    function clearForm(){
-      selectedId = null;
-      nameEl.value = "";
-      qtyEl.value = "";
-      thresholdEl.value = "";
-      noteEl.value = "";
-      modeText.textContent = "Yeni ürün ekle";
-      statusDot.className = "dot";
-      deleteBtn.style.display = "none";
-      nameEl.focus();
-    }
-
-    function select(id){
-      const it = items.find(x=>x.id===id);
-      if(!it) return;
-      selectedId = id;
-      nameEl.value = it.name;
-      qtyEl.value = it.qty;
-      thresholdEl.value = it.threshold ?? 0;
-      noteEl.value = it.note || "";
-      modeText.textContent = "Ürün düzenle";
-      statusDot.className = "dot warn";
-      deleteBtn.style.display = "inline-flex";
-      toast("Düzenleme moduna geçildi");
-    }
-
-    function upsert(){
-      const name = nameEl.value.trim();
-      const qty = Number(qtyEl.value);
-      const threshold = Number(thresholdEl.value || 0);
-      const note = noteEl.value.trim();
-
-      if(!name){ toast("Ürün adı boş olamaz"); nameEl.focus(); return; }
-      if(!Number.isFinite(qty) || qty < 0){ toast("Adet 0 veya daha büyük olmalı"); qtyEl.focus(); return; }
-      if(!Number.isFinite(threshold) || threshold < 0){ toast("Eşik 0 veya daha büyük olmalı"); thresholdEl.focus(); return; }
-
-      const now = Date.now();
-
-      if(selectedId){
-        const it = items.find(x=>x.id===selectedId);
-        if(!it) { clearForm(); return; }
-        it.name = name;
-        it.qty = qty;
-        it.threshold = threshold;
-        it.note = note;
-        it.updatedAt = now;
-        save(items);
-        toast("Güncellendi");
-      }else{
-        // If same name exists, offer merge behavior: update existing
-        const existing = items.find(x=>x.name.toLowerCase()===name.toLowerCase());
-        if(existing){
-          existing.qty = qty;
-          existing.threshold = threshold;
-          existing.note = note;
-          existing.updatedAt = now;
-          save(items);
-          toast("Aynı isim bulundu: güncellendi");
-        }else{
-          items.unshift({
-            id: uid(),
-            name,
-            qty,
-            threshold,
-            note,
-            createdAt: now,
-            updatedAt: now
-          });
-          save(items);
-          toast("Eklendi");
-        }
-      }
-
-      render();
-      clearForm();
-    }
-
-    function removeSelected(){
-      if(!selectedId) return;
-      const it = items.find(x=>x.id===selectedId);
-      if(!it) return;
-      if(!confirm(`Silinsin mi?\n\n${it.name}`)) return;
-      items = items.filter(x=>x.id!==selectedId);
-      save(items);
-      toast("Silindi");
-      render();
-      clearForm();
-    }
-
-    function changeQty(id, delta){
-      const it = items.find(x=>x.id===id);
-      if(!it) return;
-      it.qty = Math.max(0, (Number(it.qty)||0) + delta);
-      it.updatedAt = Date.now();
-      save(items);
-      render();
-    }
-
-    // ===== CSV =====
-    function toCSV(){
-      // id,name,qty,threshold,note,createdAt,updatedAt
-      const header = ["id","name","qty","threshold","note","createdAt","updatedAt"];
-      const rows = items.map(it => header.map(k => csvEscape(it[k] ?? "")).join(","));
-      return header.join(",") + "\n" + rows.join("\n");
-    }
-    function csvEscape(v){
-      const s = String(v);
-      if(/[,"\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
-      return s;
-    }
-    function downloadCSV(){
-      const blob = new Blob([toCSV()], {type:"text/csv;charset=utf-8"});
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `stok_${new Date().toISOString().slice(0,10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      toast("CSV indirildi");
-    }
-
-    function parseCSV(text){
-      // Simple CSV parser supporting quoted fields
-      const lines = text.replace(/\r/g,"").split("\n").filter(l=>l.trim().length);
-      if(lines.length < 1) return [];
-      const header = splitCSVLine(lines[0]).map(h=>h.trim());
-      const out = [];
-      for(let i=1;i<lines.length;i++){
-        const cols = splitCSVLine(lines[i]);
-        const obj = {};
-        header.forEach((h, idx)=> obj[h] = cols[idx] ?? "");
-        out.push(obj);
-      }
-      return out;
-    }
-    function splitCSVLine(line){
-      const res = [];
-      let cur = "";
-      let inQ = false;
-      for(let i=0;i<line.length;i++){
-        const ch = line[i];
-        if(inQ){
-          if(ch === '"'){
-            if(line[i+1] === '"'){ cur+='"'; i++; }
-            else inQ = false;
-          }else cur += ch;
-        }else{
-          if(ch === '"') inQ = true;
-          else if(ch === ","){ res.push(cur); cur=""; }
-          else cur += ch;
-        }
-      }
-      res.push(cur);
-      return res;
-    }
-
-    async function importCSVFile(file){
-      const text = await file.text();
-      const rows = parseCSV(text);
-
-      // Accept both with/without id columns (fallback by name)
-      const now = Date.now();
-      let added=0, updated=0;
-
-      for(const r of rows){
-        const name = (r.name ?? r["Ürün"] ?? r["urun"] ?? r["product"] ?? "").toString().trim();
-        if(!name) continue;
-
-        const qty = Number(r.qty ?? r["Adet"] ?? r["adet"] ?? 0);
-        const threshold = Number(r.threshold ?? r["Eşik"] ?? r["esik"] ?? 0);
-        const note = (r.note ?? r["Not"] ?? r["not"] ?? "").toString().trim();
-
-        const existing = items.find(x=>x.name.toLowerCase()===name.toLowerCase());
-        if(existing){
-          existing.qty = Number.isFinite(qty) ? Math.max(0, qty) : existing.qty;
-          existing.threshold = Number.isFinite(threshold) ? Math.max(0, threshold) : (existing.threshold ?? 0);
-          existing.note = note || existing.note || "";
-          existing.updatedAt = now;
-          updated++;
-        }else{
-          items.unshift({
-            id: r.id ? String(r.id) : uid(),
-            name,
-            qty: Number.isFinite(qty) ? Math.max(0, qty) : 0,
-            threshold: Number.isFinite(threshold) ? Math.max(0, threshold) : 0,
-            note,
-            createdAt: Number(r.createdAt)||now,
-            updatedAt: Number(r.updatedAt)||now
-          });
-          added++;
-        }
-      }
-
-      save(items);
-      render();
-      toast(`İçe aktarıldı: +${added} / güncellenen ${updated}`);
-    }
-
-    // ===== Events =====
-    saveBtn.addEventListener("click", upsert);
-    resetBtn.addEventListener("click", clearForm);
-    deleteBtn.addEventListener("click", removeSelected);
-
-    searchEl.addEventListener("input", render);
-    sortEl.addEventListener("change", render);
-    onlyLowEl.addEventListener("change", render);
-
-    tbody.addEventListener("click", (e)=>{
-      const btn = e.target.closest("button");
-      if(!btn) return;
-      const act = btn.dataset.act;
-      const id = btn.dataset.id;
-      if(act==="inc"){ changeQty(id, +1); toast("+1"); }
-      if(act==="dec"){ changeQty(id, -1); toast("-1"); }
-      if(act==="edit"){ select(id); }
-      e.stopPropagation();
-    });
-
-    $("#exportBtn").addEventListener("click", downloadCSV);
-    $("#importBtn").addEventListener("click", ()=>$("#fileInput").click());
-    $("#fileInput").addEventListener("change", async (e)=>{
-      const file = e.target.files?.[0];
-      if(!file) return;
-      await importCSVFile(file);
-      e.target.value = "";
-    });
-
-    wipeBtn.addEventListener("click", ()=>{
-      if(!confirm("Tüm stok verileri silinsin mi?")) return;
-      items = [];
-      save(items);
-      render();
-      clearForm();
-      toast("Hepsi sıfırlandı");
-    });
-
-    // Enter to save (UX)
-    [nameEl, qtyEl, thresholdEl, noteEl].forEach(el=>{
-      el.addEventListener("keydown", (e)=>{
-        if(e.key==="Enter"){ upsert(); }
-      });
-    });
-
-    // Clock
-    function tick(){
-      $("#clock").textContent = "🕒 " + new Date().toLocaleString("tr-TR");
-    }
-    setInterval(tick, 1000); tick();
-
-    // Init
+  // 🔄 CANLI SENKRON (3 KİŞİ AYNI ANDA)
+  const q = query(itemsCol, orderBy("updatedAt", "desc"));
+  onSnapshot(q, snap => {
+    items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     render();
+  });
+
+  function render(){
+    tbody.innerHTML = "";
+    items.forEach(it=>{
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${it.name}</td>
+        <td>${it.qty}</td>
+        <td>
+          <button onclick="changeQty('${it.id}',1)">+1</button>
+          <button onclick="changeQty('${it.id}',-1)">-1</button>
+          <button onclick="editItem('${it.id}')">Edit</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  window.upsert = async function(){
+    const name = nameEl.value.trim();
+    if(!name) return alert("Ürün adı boş");
+
+    const data = {
+      name,
+      qty: Number(qtyEl.value||0),
+      threshold: Number(thresholdEl.value||0),
+      note: noteEl.value||"",
+      updatedAt: serverTimestamp()
+    };
+
+    if(selectedId){
+      await updateDoc(doc(db,"items",selectedId), data);
+    }else{
+      const ref = doc(itemsCol);
+      await setDoc(ref, { ...data, createdAt: serverTimestamp() });
+    }
     clearForm();
-  </script>
+  }
+
+  window.changeQty = async function(id,delta){
+    const it = items.find(x=>x.id===id);
+    if(!it) return;
+    await updateDoc(doc(db,"items",id),{
+      qty: Math.max(0,(it.qty||0)+delta),
+      updatedAt: serverTimestamp()
+    });
+  }
+
+  window.editItem = function(id){
+    const it = items.find(x=>x.id===id);
+    if(!it) return;
+    selectedId = id;
+    nameEl.value = it.name;
+    qtyEl.value = it.qty;
+    thresholdEl.value = it.threshold||0;
+    noteEl.value = it.note||"";
+  }
+
+  function clearForm(){
+    selectedId = null;
+    nameEl.value = "";
+    qtyEl.value = "";
+    thresholdEl.value = "";
+    noteEl.value = "";
+  }
+</script>
 </body>
 </html>
+
 
